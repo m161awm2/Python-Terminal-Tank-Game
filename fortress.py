@@ -4,9 +4,9 @@ import time
 import random
 
 GRAVITY = 9.8
-MAX_HP = 3
+MAX_HP = 5
 MAX_FUEL = 100
-FUEL_COST = 10
+FUEL_COST = 5
 CHAR_WIDTH = 3
 MAX_POWER = 60
 MIN_POWER = 5
@@ -24,6 +24,7 @@ class Player:
         self.color = color
         self.item_id = None
         self.active_item = None
+        self.trails = []   # 🔥 발사 후 탄도 저장
 
 
 class Item:
@@ -84,7 +85,7 @@ def calculate_path(shooter, angle_deg, power, width, ground_y,
             else:
                 break
 
-        # 일반 미리보기는 거리 제한
+        # 일반 미리보기 거리 제한
         if preview and not full_preview:
             dist = math.sqrt((x - shooter.x) ** 2 +
                              (y - (ground_y - 1)) ** 2)
@@ -96,22 +97,36 @@ def calculate_path(shooter, angle_deg, power, width, ground_y,
     return points
 
 
+# ================= 폭발 =================
+def explosion(stdscr, y, x):
+    for r in range(2):
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                try:
+                    stdscr.addstr(y + dy, x + dx, "*",
+                                  curses.color_pair(3))
+                except:
+                    pass
+        stdscr.refresh()
+        time.sleep(0.05)
+
+
 # ================= 발사 =================
-def shoot(stdscr, shooter, target, width, ground_y):
+def shoot(stdscr, shooter, target, width, ground_y, mines):
 
     item = shooter.item_id
     damage = 1
-
     paths = []
 
-    # 멀티샷 (동시 7발)
+    # 멀티샷 (각도 그대로, 파워만 ±3씩 변화)
     if item == 1:
-        for offset in [-12, -8, -4, 0, 4, 8, 12]:
+        power_offsets = [-3, -2, -1, 0, 1, 2, 3]  # 파워 변형
+        for po in power_offsets:
             paths.append(
                 calculate_path(
                     shooter,
-                    shooter.angle + offset,
-                    shooter.power,
+                    shooter.angle,       # 각도는 그대로
+                    shooter.power + po,  # 파워만 조정
                     width,
                     ground_y
                 )
@@ -130,7 +145,7 @@ def shoot(stdscr, shooter, target, width, ground_y):
         )
 
     if not paths:
-        return "miss"
+        return
 
     max_len = max(len(p) for p in paths)
 
@@ -138,20 +153,24 @@ def shoot(stdscr, shooter, target, width, ground_y):
         for path in paths:
             if i < len(path):
                 iy, ix = path[i]
-
                 try:
-                    stdscr.addstr(iy, ix, "*",
-                                  curses.color_pair(3) | curses.A_BOLD)
+                    stdscr.addstr(
+                        iy, ix, "*",
+                        curses.color_pair(3) | curses.A_BOLD
+                    )
                 except:
                     pass
 
-                # 💥 폭발 판정 (양옆 포함)
+                # 명중 판정
                 if ground_y - 2 <= iy <= ground_y:
                     for ex in [ix - 1, ix, ix + 1]:
                         if target.x <= ex < target.x + CHAR_WIDTH:
                             explosion(stdscr, iy, ix)
                             target.hp -= damage
-                            return "dead" if target.hp <= 0 else "hit"
+                            shooter.trails = paths
+                            shooter.item_id = None
+                            shooter.active_item = None
+                            return
 
         stdscr.refresh()
         time.sleep(0.02)
@@ -166,30 +185,31 @@ def shoot(stdscr, shooter, target, width, ground_y):
 
     # 지뢰 설치
     if item == 3 and paths[0]:
-        return ("mine", paths[0][-1][1])
+        mines.append(Mine(paths[0][-1][1], shooter.name))
 
-    return "miss"
-
-
-# ================= 폭발 이펙트 =================
-def explosion(stdscr, y, x):
-    for r in range(2):
-        for dy in range(-r, r + 1):
-            for dx in range(-r, r + 1):
-                try:
-                    stdscr.addstr(y + dy, x + dx, "*",
-                                  curses.color_pair(3))
-                except:
-                    pass
-        stdscr.refresh()
-        time.sleep(0.05)
+    shooter.trails = paths
+    shooter.item_id = None
+    shooter.active_item = None
 
 
 # ================= 화면 출력 =================
 def draw(stdscr, p1, p2, current, item, mines):
+
     stdscr.clear()
     height, width = stdscr.getmaxyx()
     ground_y = height - 2
+
+    # 🔥 이전 발사 트레일 (은색)
+    for trail in current.trails:
+        for iy, ix in trail:
+            if 0 <= iy < height and 0 <= ix < width:
+                try:
+                    stdscr.addstr(
+                        iy, ix, ".",
+                        curses.color_pair(5) | curses.A_DIM
+                    )
+                except:
+                    pass
 
     # 땅
     stdscr.attron(curses.color_pair(4))
@@ -199,12 +219,17 @@ def draw(stdscr, p1, p2, current, item, mines):
     # 지뢰
     for m in mines:
         if 0 <= m.x < width:
-            stdscr.addstr(ground_y, m.x, "M", curses.color_pair(3))
+            stdscr.addstr(
+                ground_y - 1, m.x,
+                "M", curses.color_pair(3)
+            )
 
     # 아이템
     if item and 0 <= item.x < width:
-        stdscr.addstr(ground_y - 1, item.x, "?",
-                      curses.color_pair(3) | curses.A_BLINK)
+        stdscr.addstr(
+            ground_y - 1, item.x,
+            "?", curses.color_pair(3) | curses.A_BLINK
+        )
 
     # 🔥 탄도 미리보기
     preview = calculate_path(
@@ -221,37 +246,54 @@ def draw(stdscr, p1, p2, current, item, mines):
     for iy, ix in preview:
         if 0 <= iy < height and 0 <= ix < width:
             try:
-                stdscr.addstr(iy, ix, ".", curses.color_pair(3))
+                stdscr.addstr(
+                    iy, ix, ".",
+                    curses.color_pair(3)
+                )
             except:
                 pass
 
     # 플레이어
     if p1.hp > 0:
-        stdscr.addstr(ground_y - 1, p1.x, "[1]",
-                      curses.color_pair(1) | curses.A_BOLD)
+        stdscr.addstr(
+            ground_y - 1, p1.x,
+            "[1]", curses.color_pair(1) | curses.A_BOLD
+        )
 
     if p2.hp > 0:
-        stdscr.addstr(ground_y - 1, p2.x, "[2]",
-                      curses.color_pair(2) | curses.A_BOLD)
+        stdscr.addstr(
+            ground_y - 1, p2.x,
+            "[2]", curses.color_pair(2) | curses.A_BOLD
+        )
 
     # UI
-    stdscr.addstr(0, 0,
-                  f"{current.name} TURN",
-                  curses.color_pair(current.color) | curses.A_BOLD)
+    stdscr.addstr(
+        0, 0,
+        f"{current.name} TURN",
+        curses.color_pair(current.color) | curses.A_BOLD
+    )
 
-    stdscr.addstr(1, 0,
-                  f"Angle: {current.angle} | Power: {current.power}")
+    stdscr.addstr(
+        1, 0,
+        f"Angle: {current.angle} | Power: {current.power}"
+    )
 
-    stdscr.addstr(2, 0,
-                  f"Fuel: {current.fuel} | Item: {current.active_item or 'None'}")
+    stdscr.addstr(
+        2, 0,
+        f"Fuel: {current.fuel} | Item: {current.active_item or 'None'}"
+    )
 
-    stdscr.addstr(4, 0,
-                  f"P1 HP: {'♥' * max(0, p1.hp)}",
-                  curses.color_pair(1))
+    stdscr.addstr(
+        4, 0,
+        f"P1 HP: {'♥' * max(0, p1.hp)}",
+        curses.color_pair(1)
+    )
 
-    stdscr.addstr(5, 0,
-                  f"P2 HP: {'♥' * max(0, p2.hp)}",
-                  curses.color_pair(2))
+    stdscr.addstr(
+        5, 0,
+        f"P2 HP: {'♥' * max(0, p2.hp)}",
+        curses.color_pair(2)
+    )
 
     stdscr.refresh()
 
@@ -264,6 +306,7 @@ def main(stdscr):
     curses.init_pair(2, curses.COLOR_MAGENTA, curses.COLOR_BLACK)
     curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
     curses.init_pair(4, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)  # 🔥 은색
 
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -284,23 +327,24 @@ def main(stdscr):
         opponent = p2 if turn % 2 == 0 else p1
         current.fuel = MAX_FUEL
 
+        if not item:
+            item = Item(
+                random.randint(10, width - 10),
+                random.randint(1, 4)
+            )
+
         while True:
             draw(stdscr, p1, p2, current, item, mines)
             key = stdscr.getch()
 
-            if key == curses.KEY_UP:
-                current.power = min(MAX_POWER, current.power + 1)
-            elif key == curses.KEY_DOWN:
-                current.power = max(MIN_POWER, current.power - 1)
-            elif key == curses.KEY_RIGHT:
-                current.angle = min(180, current.angle + 1)
-            elif key == curses.KEY_LEFT:
-                current.angle = max(0, current.angle - 1)
-
-            elif key in [ord('a'), ord('d')] and current.fuel >= FUEL_COST:
+            # 이동
+            if key in [ord('a'), ord('d')] and current.fuel >= FUEL_COST:
                 move = -1 if key == ord('a') else 1
-                current.x = max(1, min(width - CHAR_WIDTH - 1,
-                                       current.x + move))
+                current.x = max(
+                    1,
+                    min(width - CHAR_WIDTH - 1,
+                        current.x + move)
+                )
                 current.fuel -= FUEL_COST
 
                 # 아이템 획득
@@ -320,28 +364,32 @@ def main(stdscr):
                         current.hp -= 1
                         mines.remove(m)
 
+            elif key == curses.KEY_UP:
+                current.power = min(MAX_POWER, current.power + 1)
+            elif key == curses.KEY_DOWN:
+                current.power = max(MIN_POWER, current.power - 1)
+            elif key == curses.KEY_LEFT:
+                current.angle = max(0, current.angle - 1)
+            elif key == curses.KEY_RIGHT:
+                current.angle = min(180, current.angle + 1)
+
             elif key == ord(' '):
-                result = shoot(stdscr, current, opponent,
-                               width, height - 2)
-
-                if isinstance(result, tuple):
-                    mines.append(Mine(result[1], current.name))
-
-                current.item_id = None
-                current.active_item = None
+                shoot(stdscr, current, opponent,
+                      width, height - 2, mines)
                 break
 
             time.sleep(0.01)
 
         turn += 1
-        if not item:
-            item = Item(random.randint(10, width - 10),
-                        random.randint(1, 4))
 
     stdscr.clear()
     winner = "Player 1" if p1.hp > 0 else "Player 2"
-    stdscr.addstr(height // 2, width // 2 - 10,
-                  f"{winner} WINS!", curses.A_BOLD)
+    stdscr.addstr(
+        height // 2,
+        width // 2 - 10,
+        f"{winner} WINS!",
+        curses.A_BOLD
+    )
     stdscr.refresh()
     time.sleep(3)
 
