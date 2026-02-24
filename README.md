@@ -24,3 +24,26 @@
 | **방향키 상/하** | 발사 파워(세기) 조절 |
 | **A / D** | 왼쪽 / 오른쪽으로 이동 (연료 소모) |
 | **Space** | 포탄 발사 |
+
+## 🐧 Linux 실행 방법
+
+Arc of Fate는 터미널 기반 게임이므로 Linux에서 직접 실행할 수 있습니다.
+
+### 1. Python 설치
+
+```bash
+sudo apt install python3 python3-curses
+```
+
+### 2. 프로젝트 다운로드
+
+```bash
+git clone https://github.com/YOUR_ID/Arc-of-Fate.git
+cd Arc-of-Fate
+```
+
+### 3. 실행
+
+```bash
+python3 main.py
+```
